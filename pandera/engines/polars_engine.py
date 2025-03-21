@@ -18,6 +18,7 @@ from typing import (
     Union,
 )
 
+import narwhals.stable.v1 as nw
 import polars as pl
 from packaging import version
 from polars.datatypes import DataTypeClass
@@ -47,7 +48,9 @@ def polars_version() -> version.Version:
     return version.parse(pl.__version__)
 
 
-def convert_py_dtype_to_polars_dtype(dtype):
+def convert_py_dtype_to_polars_dtype(
+    dtype,
+):  # TODO: Add in Narwhals - see https://github.com/narwhals-dev/narwhals/issues/2264
     if isinstance(dtype, DataTypeClass):
         return dtype
 
@@ -65,30 +68,32 @@ def convert_py_dtype_to_polars_dtype(dtype):
 
 def polars_object_coercible(
     data_container: PolarsData, type_: PolarsDataType
-) -> pl.LazyFrame:
+) -> nw.LazyFrame:
     """Checks whether a polars object is coercible with respect to a type."""
-    key = data_container.key or "*"
-    coercible = data_container.lazyframe.cast(
-        {key: type_}, strict=False
-    ).select(pl.col(key).is_not_null())
+    col = nw.col(data_container.key) if data_container.key else nw.all()
+    coercible = data_container.lazyframe.with_columns(
+        col.cast(type_)
+    ).select(  # TODO: Strict?
+        ~col.is_null()
+    )
     # reduce to a single boolean column
-    return coercible.select(pl.all_horizontal(key).alias(CHECK_OUTPUT_KEY))
+    return coercible.select(nw.all_horizontal(col).alias(CHECK_OUTPUT_KEY))
 
 
 def polars_failure_cases_from_coercible(
     data_container: PolarsData,
-    is_coercible: pl.LazyFrame,
-) -> pl.LazyFrame:
+    is_coercible: nw.LazyFrame,
+) -> nw.LazyFrame:
     """Get the failure cases resulting from trying to coerce a polars object."""
-    return pl.concat(
+    return nw.concat(
         items=[data_container.lazyframe, is_coercible], how="horizontal"
-    ).filter(pl.col(CHECK_OUTPUT_KEY).not_())
+    ).filter(~nw.col(CHECK_OUTPUT_KEY))
 
 
 def polars_coerce_failure_cases(
     data_container: PolarsData,
     type_: Any,
-) -> Tuple[pl.DataFrame, pl.DataFrame]:
+) -> Tuple[nw.DataFrame, nw.DataFrame]:
     """
     Get the failure cases resulting from trying to coerce a polars object
     into particular data type.
@@ -97,7 +102,7 @@ def polars_coerce_failure_cases(
         is_coercible = polars_object_coercible(data_container, type_)
     except (TypeError, pl.InvalidOperationError):
         is_coercible = data_container.lazyframe.with_columns(
-            **{CHECK_OUTPUT_KEY: pl.lit(False)}
+            **{CHECK_OUTPUT_KEY: nw.lit(False)}
         ).select(CHECK_OUTPUT_KEY)
 
     try:
@@ -108,12 +113,12 @@ def polars_coerce_failure_cases(
     except COERCION_ERRORS:
         # If coercion fails, all of the relevant rows are failure cases
         failure_cases = data_container.lazyframe.select(
-            data_container.key or "*"
+            data_container.key if data_container.key else nw.all()
         ).collect()
 
         is_coercible = (
             data_container.lazyframe.with_columns(
-                **{CHECK_OUTPUT_KEY: pl.lit(False)}
+                **{CHECK_OUTPUT_KEY: nw.lit(False)}
             ).select(CHECK_OUTPUT_KEY)
         ).collect()
 
@@ -154,19 +159,21 @@ class DataType(dtypes.DataType):
             except ValueError:
                 object.__setattr__(self, "type", pl.Object)
 
-    def coerce(self, data_container: PolarsDataContainer) -> pl.LazyFrame:
+    def coerce(self, data_container: PolarsDataContainer) -> nw.LazyFrame:
         """Coerce data container to the data type."""
         if isinstance(data_container, pl.LazyFrame):
+            data_container = PolarsData(nw.from_native(data_container).lazy())
+        elif isinstance(data_container, nw.LazyFrame):
             data_container = PolarsData(data_container)
 
         if data_container.key is None:
-            dtypes = self.type
+            dtypes = nw.all().cast(self.type)
         else:
-            dtypes = {data_container.key: self.type}
+            dtypes = nw.col(data_container.key).cast(self.type)
 
-        return data_container.lazyframe.cast(dtypes, strict=True)
+        return data_container.lazyframe.with_columns(dtypes)
 
-    def try_coerce(self, data_container: PolarsDataContainer) -> pl.LazyFrame:
+    def try_coerce(self, data_container: PolarsDataContainer) -> nw.LazyFrame:
         """Coerce data container to the data type,
         raises a :class:`~pandera.errors.ParserError` if the coercion fails
         :raises: :class:`~pandera.errors.ParserError`: if coercion fails
@@ -174,6 +181,8 @@ class DataType(dtypes.DataType):
         from pandera.api.polars.utils import get_lazyframe_schema
 
         if isinstance(data_container, pl.LazyFrame):
+            data_container = PolarsData(nw.from_native(data_container).lazy())
+        elif isinstance(data_container, nw.LazyFrame):
             data_container = PolarsData(data_container)
 
         try:
@@ -391,11 +400,15 @@ class Decimal(DataType, dtypes.Decimal):
     def coerce(self, data_container: PolarsDataContainer) -> pl.LazyFrame:
         """Coerce data container to the data type."""
         if isinstance(data_container, pl.LazyFrame):
+            data_container = PolarsData(nw.from_native(data_container).lazy())
+        elif isinstance(data_container, nw.LazyFrame):
             data_container = PolarsData(data_container)
 
         key = data_container.key or "*"
         return data_container.lazyframe.cast({key: pl.Float64}).cast(
-            {key: pl.Decimal(scale=self.scale, precision=self.precision)},
+            {
+                key: pl.Decimal(scale=self.scale, precision=self.precision)
+            },  # TODO: Narwhals doesn't have Decimal scale and precision support
             strict=True,
         )
 

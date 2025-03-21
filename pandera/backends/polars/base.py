@@ -4,7 +4,7 @@ import warnings
 from collections import defaultdict
 from typing import Dict, List, Optional
 
-import polars as pl
+import narwhals.stable.v1 as nw
 
 from pandera.api.base.error_handler import ErrorHandler
 from pandera.api.polars.types import CheckResult
@@ -19,12 +19,12 @@ from pandera.errors import (
 )
 
 
-def is_float_dtype(check_obj: pl.LazyFrame, selector):
+def is_float_dtype(check_obj: nw.LazyFrame, selector):
     """Check if a column/selector is a float."""
     return all(
-        dtype in {pl.Float32, pl.Float64}
+        dtype.is_float()
         for dtype in get_lazyframe_column_dtypes(
-            check_obj.select(pl.col(selector))
+            check_obj.select(nw.col(selector))
         )
     )
 
@@ -34,13 +34,13 @@ class PolarsSchemaBackend(BaseSchemaBackend):
 
     def subsample(
         self,
-        check_obj: pl.LazyFrame,
+        check_obj: nw.LazyFrame,
         head: Optional[int] = None,
         tail: Optional[int] = None,
         sample: Optional[int] = None,
         random_state: Optional[int] = None,
-    ):
-        obj_subsample = []
+    ) -> nw.LazyFrame:
+        obj_subsample: List[nw.LazyFrame] = []
         if head is not None:
             obj_subsample.append(check_obj.head(head))
         if tail is not None:
@@ -49,18 +49,19 @@ class PolarsSchemaBackend(BaseSchemaBackend):
             obj_subsample.append(
                 # mypy is detecting a bug https://github.com/unionai-oss/pandera/issues/1912
                 check_obj.sample(  # type:ignore [attr-defined]
-                    sample, random_state=random_state
+                    sample,
+                    seed=random_state,  # TODO: Narwhals has sample for DataFrame only?
                 )
             )
         return (
             check_obj
             if not obj_subsample
-            else pl.concat(obj_subsample).unique()
+            else nw.concat(obj_subsample).unique()
         )
 
     def run_check(
         self,
-        check_obj: pl.LazyFrame,
+        check_obj: nw.LazyFrame,
         schema,
         check,
         check_index: int,
@@ -154,47 +155,40 @@ class PolarsSchemaBackend(BaseSchemaBackend):
                 )
             )
 
-            if isinstance(err.failure_cases, pl.LazyFrame):
+            if isinstance(err.failure_cases, nw.LazyFrame):
                 raise NotImplementedError
 
-            if isinstance(err.failure_cases, pl.DataFrame):
+            if isinstance(err.failure_cases, nw.DataFrame):
                 failure_cases_df = err.failure_cases
 
                 # get row number of the failure cases
-                if hasattr(err.check_output, "with_row_index"):
-                    _index_lf = err.check_output.with_row_index("index")
-                else:
-                    _index_lf = err.check_output.with_row_count("index")
-
-                index = _index_lf.filter(pl.col(CHECK_OUTPUT_KEY).eq(False))[
-                    "index"
-                ]
+                _index_lf = err.check_output.with_row_index("index")
+                index = _index_lf.filter(~nw.col(CHECK_OUTPUT_KEY))["index"]
                 if len(err.failure_cases.columns) > 1:
                     # for boolean dataframe check results, reduce failure cases
                     # to a struct column
                     failure_cases_df = err.failure_cases.with_columns(
-                        failure_case=pl.Series(
-                            err.failure_cases.rows(named=True)
+                        failure_case=nw.new_series(
+                            name="failure_case",
+                            values=err.failure_cases.rows(named=True),
+                            # dtype=nw.Struct()
+                            backend=nw.Implementation.POLARS,
                         )
-                    ).select(pl.col.failure_case.struct.json_encode())
+                    ).select(
+                        nw.col("failure_case").struct.json_encode()
+                    )  # TODO: implement json_encode
                 else:
                     failure_cases_df = err.failure_cases.rename(
                         {err.failure_cases.columns[0]: "failure_case"}
                     )
 
                 failure_cases_df = failure_cases_df.with_columns(
-                    schema_context=pl.lit(err.schema.__class__.__name__),
-                    column=pl.lit(err.schema.name),
-                    check=pl.lit(check_identifier),
-                    check_number=pl.lit(err.check_index),
-                    index=index,
-                ).cast(
-                    {
-                        "failure_case": pl.Utf8,
-                        "column": pl.String,
-                        "index": pl.Int32,
-                        "check_number": pl.Int32,
-                    }
+                    failure_case=nw.col("failure_case").cast(nw.String()),
+                    schema_context=nw.lit(err.schema.__class__.__name__),
+                    column=nw.lit(err.schema.name).cast(nw.String()),
+                    check=nw.lit(check_identifier),
+                    check_number=nw.lit(err.check_index, dtype=nw.Int32()),
+                    index=index.cast(nw.Int32()),
                 )
 
             else:
@@ -207,17 +201,17 @@ class PolarsSchemaBackend(BaseSchemaBackend):
                 scalar_failure_cases["check"].append(check_identifier)
                 scalar_failure_cases["check_number"].append(err.check_index)
                 scalar_failure_cases["index"].append(None)
-                failure_cases_df = pl.DataFrame(scalar_failure_cases).cast(
-                    {
-                        "check_number": pl.Int32,
-                        "column": pl.String,
-                        "index": pl.Int32,
-                    }
+                failure_cases_df = nw.from_dict(
+                    data=scalar_failure_cases, backend=nw.Implementation.POLARS
+                ).with_columns(
+                    check_number=nw.col("check_number").cast(nw.Int32()),
+                    column=nw.col("column").cast(nw.String()),
+                    index=nw.col("index").cast(nw.Int32()),
                 )
 
             failure_case_collection.append(failure_cases_df)
 
-        failure_cases = pl.concat(failure_case_collection)
+        failure_cases = nw.concat(failure_case_collection)
 
         error_handler = ErrorHandler()
         error_handler.collect_errors(schema_errors)
@@ -237,26 +231,31 @@ class PolarsSchemaBackend(BaseSchemaBackend):
             error_counts[error["reason_code"].name] += 1
 
         return FailureCaseMetadata(
-            failure_cases=failure_cases,
+            failure_cases=failure_cases.to_native(),
             message=error_dicts,
             error_counts=error_counts,
         )
 
     def drop_invalid_rows(
         self,
-        check_obj: pl.LazyFrame,
+        check_obj: nw.LazyFrame,
         error_handler: ErrorHandler,
-    ) -> pl.LazyFrame:
+    ) -> nw.LazyFrame:
         """Remove invalid elements in a check obj according to failures in caught by the error handler."""
+        # breakpoint()
         errors = error_handler.schema_errors
-        check_outputs = pl.DataFrame(
-            {str(i): err.check_output for i, err in enumerate(errors)}
-        )
-        valid_rows = check_outputs.select(
-            valid_rows=pl.fold(
-                acc=pl.lit(True),
-                function=lambda acc, x: acc & x,
-                exprs=pl.col(pl.Boolean),
+        check_outputs = (
+            nw.from_dict(  # TODO: check_output can be None or a LazyFrame...
+                data={
+                    str(i): err.check_output for i, err in enumerate(errors)
+                },
+                backend=nw.Implementation.POLARS,
             )
-        )["valid_rows"]
-        return check_obj.filter(valid_rows)
+            .lazy()
+            .select(valid_rows=nw.all_horizontal(nw.selectors.boolean()))
+        )
+        return (
+            nw.concat([check_obj, check_outputs], how="horizontal")
+            .filter(nw.col("valid_rows"))
+            .drop(["valid_rows"])
+        )
