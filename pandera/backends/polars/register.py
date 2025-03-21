@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Optional
 
-import polars as pl
+import narwhals.stable.v1 as nw
 
 
 @lru_cache
@@ -25,6 +25,6 @@ def register_polars_backends(
     from pandera.backends.polars.components import ColumnBackend
     from pandera.backends.polars.container import DataFrameSchemaBackend
 
-    DataFrameSchema.register_backend(pl.LazyFrame, DataFrameSchemaBackend)
-    Column.register_backend(pl.LazyFrame, ColumnBackend)
-    Check.register_backend(pl.LazyFrame, PolarsCheckBackend)
+    DataFrameSchema.register_backend(nw.LazyFrame, DataFrameSchemaBackend)
+    Column.register_backend(nw.LazyFrame, ColumnBackend)
+    Check.register_backend(nw.LazyFrame, PolarsCheckBackend)

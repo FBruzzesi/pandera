@@ -3,6 +3,7 @@
 from functools import partial
 from typing import Optional
 
+import narwhals.stable.v1 as nw
 import polars as pl
 from polars.lazyframe.group_by import LazyGroupBy
 
@@ -31,15 +32,15 @@ class PolarsCheckBackend(BaseCheckBackend):
         """Implements groupby behavior for check object."""
         raise NotImplementedError
 
-    def query(self, check_obj: pl.LazyFrame):
+    def query(self, check_obj: nw.LazyFrame):
         """Implements querying behavior to produce subset of check object."""
         raise NotImplementedError
 
-    def aggregate(self, check_obj: pl.LazyFrame):
+    def aggregate(self, check_obj: nw.LazyFrame):
         """Implements aggregation behavior for check object."""
         raise NotImplementedError
 
-    def preprocess(self, check_obj: pl.LazyFrame, key: Optional[str]):
+    def preprocess(self, check_obj: nw.LazyFrame, key: Optional[str]):
         """Preprocesses a check object before applying the check function."""
         # This handles the case of Series validation, which has no other context except
         # for the index to groupby on. Right now grouping by the index is not allowed.
@@ -48,9 +49,9 @@ class PolarsCheckBackend(BaseCheckBackend):
     def apply(self, check_obj: PolarsData):
         """Apply the check function to a check object."""
         if self.check.element_wise:
-            selector = pl.col(check_obj.key or "*")
+            selector = nw.col(check_obj.key) if check_obj.key else nw.all()
             out = check_obj.lazyframe.with_columns(
-                selector.map_elements(self.check_fn, return_dtype=pl.Boolean)
+                selector.map_batches(self.check_fn, return_dtype=nw.Boolean())
             ).select(selector)
         else:
             out = self.check_fn(check_obj)
@@ -62,11 +63,7 @@ class PolarsCheckBackend(BaseCheckBackend):
             # for checks that return a boolean dataframe, reduce to a single
             # boolean column.
             out = out.select(
-                pl.fold(
-                    acc=pl.lit(True),
-                    function=lambda acc, x: acc & x,
-                    exprs=pl.col("*"),
-                ).alias(CHECK_OUTPUT_KEY)
+                nw.all_horizontal(nw.selectors.all()).alias(CHECK_OUTPUT_KEY)
             )
         else:
             out = out.rename(
@@ -78,7 +75,7 @@ class PolarsCheckBackend(BaseCheckBackend):
     def postprocess(self, check_obj, check_output):
         """Postprocesses the result of applying the check function."""
         if isinstance(check_obj, PolarsData) and isinstance(
-            check_output, pl.LazyFrame
+            check_output, nw.LazyFrame
         ):
             return self.postprocess_lazyframe_output(check_obj, check_output)
         elif isinstance(check_output, bool):
@@ -90,18 +87,18 @@ class PolarsCheckBackend(BaseCheckBackend):
     def postprocess_lazyframe_output(
         self,
         check_obj: PolarsData,
-        check_output: pl.LazyFrame,
+        check_output: nw.LazyFrame,
     ) -> CheckResult:
         """Postprocesses the result of applying the check function."""
-        results = pl.LazyFrame(check_output.collect())
+        results = check_output.collect().lazy()
         if self.check.ignore_na:
             results = results.with_columns(
-                pl.col(CHECK_OUTPUT_KEY) | pl.col(CHECK_OUTPUT_KEY).is_null()
+                nw.col(CHECK_OUTPUT_KEY) | nw.col(CHECK_OUTPUT_KEY).is_null()
             )
-        passed = results.select([pl.col(CHECK_OUTPUT_KEY).all()])
-        failure_cases = pl.concat(
+        passed = results.select(nw.col(CHECK_OUTPUT_KEY).all())
+        failure_cases = nw.concat(
             [check_obj.lazyframe, results], how="horizontal"
-        ).filter(pl.col(CHECK_OUTPUT_KEY).not_())
+        ).filter(~nw.col(CHECK_OUTPUT_KEY))
 
         if check_obj.key is not None:
             failure_cases = failure_cases.select(check_obj.key)
@@ -118,7 +115,10 @@ class PolarsCheckBackend(BaseCheckBackend):
         check_output: bool,
     ) -> CheckResult:
         """Postprocesses the result of applying the check function."""
-        ldf_output = pl.LazyFrame({CHECK_OUTPUT_KEY: [check_output]})
+        ldf_output = nw.from_dict(
+            data={CHECK_OUTPUT_KEY: [check_output]},
+            backend=nw.Implementation.POLARS,
+        ).lazy()
         return CheckResult(
             check_output=ldf_output,
             check_passed=ldf_output,
@@ -128,7 +128,7 @@ class PolarsCheckBackend(BaseCheckBackend):
 
     def __call__(
         self,
-        check_obj: pl.LazyFrame,
+        check_obj: nw.LazyFrame,
         key: Optional[str] = None,
     ) -> CheckResult:
         check_obj = self.preprocess(check_obj, key)
