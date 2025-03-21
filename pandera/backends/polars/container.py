@@ -5,6 +5,7 @@ import traceback
 import warnings
 from typing import Any, Callable, List, Optional, Tuple
 
+import narwhals.stable.v1 as nw
 import polars as pl
 
 from pandera.api.base.error_handler import ErrorHandler
@@ -29,7 +30,7 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
     # pylint: disable=too-many-branches
     def validate(
         self,
-        check_obj: pl.LazyFrame,
+        check_obj: nw.LazyFrame,
         schema: DataFrameSchema,
         *,
         head: Optional[int] = None,
@@ -38,7 +39,7 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
         random_state: Optional[int] = None,
         lazy: bool = False,
         inplace: bool = False,
-    ):
+    ) -> nw.LazyFrame:
         if inplace:
             warnings.warn("setting inplace=True will have no effect.")
 
@@ -134,7 +135,7 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
     @validate_scope(scope=ValidationScope.DATA)
     def run_checks(
         self,
-        check_obj: pl.LazyFrame,
+        check_obj: nw.LazyFrame,
         schema,
     ) -> List[CoreCheckResult]:
         """Run a list of checks on the check object."""
@@ -170,7 +171,7 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
 
     def run_schema_component_checks(
         self,
-        check_obj: pl.LazyFrame,
+        check_obj: nw.LazyFrame,
         schema,
         schema_components: List,
         lazy: bool,
@@ -182,7 +183,7 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
         for schema_component in schema_components:
             try:
                 result = schema_component.validate(check_obj, lazy=lazy)
-                check_passed.append(isinstance(result, pl.LazyFrame))
+                check_passed.append(isinstance(result, nw.LazyFrame))
             except SchemaError as err:
                 check_results.append(
                     CoreCheckResult(
@@ -207,7 +208,7 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
         assert all(check_passed)
         return check_results
 
-    def collect_column_info(self, check_obj: pl.LazyFrame, schema):
+    def collect_column_info(self, check_obj: nw.LazyFrame, schema):
         """Collect column metadata for the dataframe."""
         column_names: List[Any] = []
         absent_column_names: List[Any] = []
@@ -247,7 +248,7 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
 
     def collect_schema_components(
         self,
-        check_obj: pl.LazyFrame,
+        check_obj: nw.LazyFrame,
         schema,
         column_info: ColumnInfo,
     ):
@@ -260,15 +261,16 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
             # specified by the dataframe-level dtype is specified.
             from pandera.api.polars.components import Column
 
-            columns = {}
-            for col in get_lazyframe_column_names(check_obj):
-                columns[col] = Column(schema.dtype, name=str(col))
+            columns = {
+                col: Column(schema.dtype, name=str(col))
+                for col in get_lazyframe_column_names(check_obj)
+            }
 
         schema_components = []
         for col_name, col in columns.items():
             if (
                 col.required  # type: ignore
-                or col_name in check_obj
+                or col_name in get_lazyframe_column_names(check_obj)
                 or col_name in column_info.regex_match_patterns
             ) and col_name not in column_info.absent_column_names:
                 col = copy.deepcopy(col)
@@ -289,7 +291,7 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
 
     def add_missing_columns(
         self,
-        check_obj: pl.LazyFrame,
+        check_obj: nw.LazyFrame,
         schema,
         column_info: ColumnInfo,
     ):
@@ -306,7 +308,7 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
         for col_name in column_info.absent_column_names:
             col_schema = schema.columns[col_name]
             if col_schema.default is None and not col_schema.nullable:
-                raise SchemaError(
+                raise SchemaError(  # TODO: Generally SchemaError will need to support data: nw.LazyFrame
                     schema=schema,
                     data=check_obj,
                     message=(
@@ -328,8 +330,13 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
 
         # Append missing columns
         check_obj = check_obj.with_columns(
-            **{k: v.default for k, v in missing_cols_schema.items()}
-        ).cast({k: v.dtype.type for k, v in missing_cols_schema.items()})
+            **{
+                k: nw.col(v.default).cast(
+                    v.dtype.type
+                )  # TODO: cannot cast directly to python types!!!
+                for k, v in missing_cols_schema.items()
+            }
+        )
 
         # Set column order
         check_obj = check_obj.select([*schema.columns])
@@ -337,10 +344,10 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
 
     def strict_filter_columns(
         self,
-        check_obj: pl.LazyFrame,
+        check_obj: nw.LazyFrame,
         schema,
         column_info: ColumnInfo,
-    ) -> pl.LazyFrame:
+    ) -> nw.LazyFrame:
         """Filter columns that aren't specified in the schema."""
         # dataframe strictness check makes sure all columns in the dataframe
         # are specified in the dataframe schema
@@ -385,7 +392,9 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
 
         return check_obj
 
-    def coerce_dtype(self, check_obj: pl.LazyFrame, schema=None):
+    def coerce_dtype(
+        self, check_obj: nw.LazyFrame, schema=None
+    ) -> nw.LazyFrame:
         """Coerce dataframe columns to the correct dtype."""
         assert schema is not None, "The `schema` argument must be provided."
 
@@ -425,9 +434,9 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
 
     def _coerce_dtype_helper(
         self,
-        obj: pl.LazyFrame,
+        obj: nw.LazyFrame,
         schema,
-    ) -> pl.LazyFrame:
+    ) -> nw.LazyFrame:
         """Coerce dataframe to the type specified in dtype.
 
         :param obj: dataframe to coerce.
@@ -481,7 +490,7 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
                     check_output=exc.parser_output,
                 ),
             )
-        except pl.ComputeError as exc:
+        except (pl.ComputeError, nw.exceptions.ComputeError) as exc:
             error_handler.collect_error(
                 validation_type(SchemaErrorReason.DATATYPE_COERCION),
                 SchemaErrorReason.DATATYPE_COERCION,
@@ -506,7 +515,7 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
 
         return obj
 
-    def set_default(self, check_obj: pl.LazyFrame, schema) -> pl.LazyFrame:
+    def set_default(self, check_obj: nw.LazyFrame, schema) -> nw.LazyFrame:
         """Set default values for columns with missing values."""
 
         for col_schema in [
@@ -525,7 +534,7 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
 
     def check_column_names_are_unique(
         self,
-        check_obj: pl.LazyFrame,
+        check_obj: nw.LazyFrame,
         schema,
     ) -> CoreCheckResult:
         """Check that column names are unique."""
@@ -536,18 +545,16 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
     @validate_scope(scope=ValidationScope.SCHEMA)
     def check_column_presence(
         self,
-        check_obj: pl.LazyFrame,
+        check_obj: nw.LazyFrame,
         schema,
         column_info: Any,
     ) -> List[CoreCheckResult]:
         """Check that all columns in the schema are present in the dataframe."""
         results = []
         if column_info.absent_column_names and not schema.add_missing_columns:
+            frame_schema = check_obj.collect_schema()
             for colname in column_info.absent_column_names:
-                if (
-                    is_regex(colname)
-                    and check_obj.select(pl.col(colname)).columns
-                ):
+                if is_regex(colname) and colname in frame_schema:
                     # don't raise an error if the column schema name is a
                     # regex pattern
                     continue
@@ -568,7 +575,7 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
     @validate_scope(scope=ValidationScope.DATA)
     def check_column_values_are_unique(
         self,
-        check_obj: pl.LazyFrame,
+        check_obj: nw.LazyFrame,
         schema,
     ) -> CoreCheckResult:
         """Check that column values are unique."""
@@ -595,9 +602,10 @@ class DataFrameSchemaBackend(PolarsSchemaBackend):
             subset = [
                 x for x in lst if x in get_lazyframe_column_names(check_obj)
             ]
-            duplicates = check_obj.select(subset).collect().is_duplicated()
+            check_obj_materialized = check_obj.select(subset).collect()
+            duplicates = check_obj_materialized.is_duplicated()
             if duplicates.any():
-                failure_cases = check_obj.filter(duplicates)
+                failure_cases = check_obj_materialized.filter(duplicates)
 
                 passed = False
                 message = f"columns '{*subset,}' not unique:\n{failure_cases}"
