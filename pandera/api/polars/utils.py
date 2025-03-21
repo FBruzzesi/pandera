@@ -3,10 +3,8 @@
 
 from typing import Dict, List
 
-import polars as pl
+import narwhals.stable.v1 as nw
 
-from pandera.api.polars.types import PolarsCheckObjects
-from pandera.engines.polars_engine import polars_version
 from pandera.config import (
     ValidationDepth,
     get_config_context,
@@ -14,31 +12,23 @@ from pandera.config import (
 )
 
 
-def get_lazyframe_schema(lf: pl.LazyFrame) -> Dict[str, pl.DataType]:
+def get_lazyframe_schema(lf: nw.LazyFrame) -> Dict[str, nw.dtypes.DType]:
     """Get a dict of column names and  dtypes from a polars LazyFrame."""
-    if polars_version().release >= (1, 0, 0):
-        return lf.collect_schema()
-    return lf.schema
+    return lf.collect_schema()
 
 
-def get_lazyframe_column_dtypes(lf: pl.LazyFrame) -> List[pl.DataType]:
+def get_lazyframe_column_dtypes(lf: nw.LazyFrame) -> List[nw.dtypes.DType]:
     """Get a list of column dtypes from a polars LazyFrame."""
-    if polars_version().release >= (1, 0, 0):
-        return lf.collect_schema().dtypes()
-    return [*lf.schema.values()]
+    return lf.collect_schema().dtypes()
 
 
-def get_lazyframe_column_names(lf: pl.LazyFrame) -> List[str]:
+def get_lazyframe_column_names(lf: nw.LazyFrame) -> List[str]:
     """Get a list of column names from a polars LazyFrame."""
-    if polars_version().release >= (1, 0, 0):
-        return lf.collect_schema().names()
-    return lf.columns
+    return lf.collect_schema().names()
 
 
-def get_validation_depth(check_obj: PolarsCheckObjects) -> ValidationDepth:
+def get_validation_depth(*, is_dataframe: bool) -> ValidationDepth:
     """Get validation depth for a given polars check object."""
-    is_dataframe = isinstance(check_obj, pl.DataFrame)
-
     config_global = get_config_global()
     config_ctx = get_config_context(validation_depth_default=None)
 
@@ -50,10 +40,7 @@ def get_validation_depth(check_obj: PolarsCheckObjects) -> ValidationDepth:
         # use global configuration if specified
         return config_global.validation_depth
 
-    if (
-        isinstance(check_obj, pl.LazyFrame)
-        and config_global.validation_depth is None
-    ):
+    if config_global.validation_depth is None and not is_dataframe:
         # if global validation depth is not set, use schema only validation
         # when validating LazyFrames
         validation_depth = ValidationDepth.SCHEMA_ONLY

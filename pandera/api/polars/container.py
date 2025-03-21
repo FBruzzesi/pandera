@@ -3,7 +3,7 @@
 import warnings
 from typing import Optional, Type
 
-import polars as pl
+import narwhals.stable.v1 as nw
 
 from pandera.api.dataframe.container import DataFrameSchema as _DataFrameSchema
 from pandera.api.polars.types import PolarsCheckObjects
@@ -55,14 +55,17 @@ class DataFrameSchema(_DataFrameSchema[PolarsCheckObjects]):
         if not get_config_context().validation_enabled:
             return check_obj
 
-        is_dataframe = isinstance(check_obj, pl.DataFrame)
-        with config_context(validation_depth=get_validation_depth(check_obj)):
+        check_obj_nw = nw.from_native(check_obj)
+        is_dataframe = isinstance(check_obj_nw, nw.DataFrame)
+        with config_context(
+            validation_depth=get_validation_depth(is_dataframe=is_dataframe)
+        ):
             if is_dataframe:
                 # if validating a polars DataFrame, use the global config setting
-                check_obj = check_obj.lazy()
+                check_obj_nw = check_obj_nw.lazy()
 
-            output = self.get_backend(check_obj).validate(
-                check_obj=check_obj,
+            output_nw = self.get_backend(check_obj_nw).validate(
+                check_obj=check_obj_nw,
                 schema=self,
                 head=head,
                 tail=tail,
@@ -73,9 +76,9 @@ class DataFrameSchema(_DataFrameSchema[PolarsCheckObjects]):
             )
 
         if is_dataframe:
-            output = output.collect()
+            output_nw = output_nw.collect()
 
-        return output
+        return output_nw.to_native()
 
     @property
     def dtype(

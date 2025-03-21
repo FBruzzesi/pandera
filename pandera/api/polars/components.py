@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional, Type
 
-import polars as pl
+import narwhals.stable.v1 as nw
 
 from pandera.api.base.types import CheckList
 from pandera.api.dataframe.components import ComponentSchema
@@ -142,7 +142,7 @@ class Column(ComponentSchema[PolarsCheckObjects]):
         if not get_config_context().validation_enabled:
             return check_obj
 
-        is_dataframe = isinstance(check_obj, pl.DataFrame)
+        is_dataframe = isinstance(check_obj, nw.DataFrame)
 
         if is_dataframe:
             check_obj = check_obj.lazy()
