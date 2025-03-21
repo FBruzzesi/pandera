@@ -3,7 +3,7 @@
 import warnings
 from typing import Any, Callable, Iterable, List, Optional, cast
 
-import polars as pl
+import narwhals.stable.v1 as nw
 
 from pandera.api.base.error_handler import ErrorHandler
 from pandera.api.polars.components import Column
@@ -29,15 +29,22 @@ from pandera.validation_depth import validate_scope, validation_type
 class ColumnBackend(PolarsSchemaBackend):
     """Column backend for polars LazyFrames."""
 
-    def preprocess(self, check_obj, inplace: bool = False):
+    def preprocess(
+        self, check_obj: nw.LazyFrame, inplace: bool = False
+    ) -> nw.LazyFrame:
         """Returns a copy of the object if inplace is False."""
         # NOTE: is this even necessary?
-        return check_obj if inplace else check_obj.clone()
+        return (
+            check_obj
+            if inplace
+            else nw.from_native(check_obj.to_native().clone())
+        )
+        # Narwhals' LazyFrame does not have a clone method??? DataFrame's do though
 
     # pylint: disable=too-many-locals
     def validate(
         self,
-        check_obj: pl.LazyFrame,
+        check_obj: nw.LazyFrame,
         schema: Column,
         *,
         head: Optional[int] = None,
@@ -46,7 +53,7 @@ class ColumnBackend(PolarsSchemaBackend):
         random_state: Optional[int] = None,
         lazy: bool = False,
         inplace: bool = False,
-    ) -> pl.LazyFrame:
+    ) -> nw.LazyFrame:
 
         if inplace:
             warnings.warn("setting inplace=True will have no effect.")
@@ -103,14 +110,14 @@ class ColumnBackend(PolarsSchemaBackend):
 
         return check_obj
 
-    def get_regex_columns(self, schema, check_obj) -> Iterable:
-        return get_lazyframe_schema(check_obj.select(pl.col(schema.selector)))
+    def get_regex_columns(self, schema, check_obj: nw.LazyFrame) -> Iterable:
+        return get_lazyframe_schema(check_obj.select(nw.col(schema.selector)))
 
     def run_checks_and_handle_errors(
         self,
         error_handler: ErrorHandler,
         schema,
-        check_obj: pl.LazyFrame,
+        check_obj: nw.LazyFrame,
         **subsample_kwargs,
     ):
         """Run checks on schema"""
@@ -158,10 +165,10 @@ class ColumnBackend(PolarsSchemaBackend):
 
     def coerce_dtype(
         self,
-        check_obj: pl.LazyFrame,
+        check_obj: nw.LazyFrame,
         schema=None,
         # pylint: disable=unused-argument
-    ) -> pl.LazyFrame:
+    ) -> nw.LazyFrame:
         """Coerce type of a pd.Series by type specified in dtype.
 
         :param check_obj: LazyFrame to coerce
@@ -172,7 +179,7 @@ class ColumnBackend(PolarsSchemaBackend):
             return check_obj
 
         config_ctx = get_config_context(validation_depth_default=None)
-        coerce_fn: Callable[[pl.LazyFrame], pl.LazyFrame] = (
+        coerce_fn: Callable[[nw.LazyFrame], nw.LazyFrame] = (
             schema.dtype.coerce
             if config_ctx.validation_depth == ValidationDepth.SCHEMA_ONLY
             else schema.dtype.try_coerce
@@ -195,7 +202,7 @@ class ColumnBackend(PolarsSchemaBackend):
     @validate_scope(scope=ValidationScope.DATA)
     def check_nullable(
         self,
-        check_obj: pl.LazyFrame,
+        check_obj: nw.LazyFrame,
         schema,
     ) -> List[CoreCheckResult]:
         """Check if a column is nullable.
@@ -211,25 +218,27 @@ class ColumnBackend(PolarsSchemaBackend):
                 )
             ]
 
-        expr = pl.col(schema.selector).is_not_null()
+        expr = ~nw.col(schema.selector).is_null()
         if is_float_dtype(check_obj, schema.selector):
-            expr = expr & pl.col(schema.selector).is_not_nan()
+            expr = expr & ~nw.col(schema.selector).is_nan()
 
         isna = check_obj.select(expr)
-        passed = isna.select([pl.col("*").all()]).collect()
+        passed = isna.select(nw.all().all()).collect()
         results = []
+
+        # TODO: Can this for loop be optimized?
         for column in get_lazyframe_column_names(isna):
             if passed.select(column).item():
                 continue
             failure_cases = (
-                pl.concat(
+                nw.concat(
                     items=[
                         check_obj,
-                        isna.select(pl.col(column).alias(CHECK_OUTPUT_KEY)),
+                        isna.select(nw.col(column).alias(CHECK_OUTPUT_KEY)),
                     ],
                     how="horizontal",
                 )
-                .filter(pl.col(CHECK_OUTPUT_KEY).not_())
+                .filter(~nw.col(CHECK_OUTPUT_KEY))
                 .select(column)
                 .collect()
             )
@@ -253,7 +262,7 @@ class ColumnBackend(PolarsSchemaBackend):
     @validate_scope(scope=ValidationScope.DATA)
     def check_unique(
         self,
-        check_obj: pl.LazyFrame,
+        check_obj: nw.LazyFrame,
         schema,
     ) -> List[CoreCheckResult]:
         check_name = "field_uniqueness"
@@ -269,22 +278,22 @@ class ColumnBackend(PolarsSchemaBackend):
         results = []
         duplicates = (
             check_obj.select(schema.selector)
+            .select(nw.all().is_duplicated())
             .collect()
-            .select(pl.col("*").is_duplicated())
         )
         for column in duplicates.columns:
-            if duplicates.select(pl.col(column).any()).item():
+            if duplicates.select(nw.col(column).any()).item():
                 failure_cases = (
-                    pl.concat(
+                    nw.concat(
                         items=[
                             check_obj,
                             duplicates.select(
-                                pl.col(column).alias("_duplicated")
+                                nw.col(column).alias("_duplicated")
                             ).lazy(),
                         ],
                         how="horizontal",
                     )
-                    .filter(pl.col("_duplicated"))
+                    .filter(nw.col("_duplicated"))
                     .select(column)
                     .collect()
                 )
@@ -293,7 +302,7 @@ class ColumnBackend(PolarsSchemaBackend):
                         passed=False,
                         check=check_name,
                         check_output=duplicates.select(
-                            pl.col(column).not_().alias(CHECK_OUTPUT_KEY)
+                            ~nw.col(column).alias(CHECK_OUTPUT_KEY)
                         ),
                         reason_code=SchemaErrorReason.SERIES_CONTAINS_DUPLICATES,
                         message=(
@@ -309,7 +318,7 @@ class ColumnBackend(PolarsSchemaBackend):
     @validate_scope(scope=ValidationScope.SCHEMA)
     def check_dtype(
         self,
-        check_obj: pl.LazyFrame,
+        check_obj: nw.LazyFrame,
         schema: Column,
     ) -> List[CoreCheckResult]:
 
@@ -329,13 +338,13 @@ class ColumnBackend(PolarsSchemaBackend):
             ]
 
         results = []
-        check_obj_subset = check_obj.select(schema.selector)
+        check_obj_subset = check_obj.select(nw.col(schema.selector))
         for column, obj_dtype in get_lazyframe_schema(
             check_obj_subset
         ).items():
             results.append(
                 CoreCheckResult(
-                    passed=schema.dtype.check(
+                    passed=schema.dtype.check(  # TODO
                         obj_dtype,
                         PolarsData(check_obj_subset, schema.selector),
                     ),
@@ -352,7 +361,9 @@ class ColumnBackend(PolarsSchemaBackend):
 
     # pylint: disable=unused-argument
     @validate_scope(scope=ValidationScope.DATA)
-    def run_checks(self, check_obj, schema) -> List[CoreCheckResult]:
+    def run_checks(
+        self, check_obj: nw.LazyFrame, schema
+    ) -> List[CoreCheckResult]:
         check_results: List[CoreCheckResult] = []
         for check_index, check in enumerate(schema.checks):
             try:
@@ -382,18 +393,23 @@ class ColumnBackend(PolarsSchemaBackend):
                 )
         return check_results
 
-    def set_default(self, check_obj: pl.LazyFrame, schema) -> pl.LazyFrame:
+    def set_default(self, check_obj: nw.LazyFrame, schema) -> nw.LazyFrame:
         """Set default values for columns with missing values."""
         if hasattr(schema, "default") and schema.default is None:
             return check_obj
 
-        if isinstance(schema.default, pl.Expr):
+        if isinstance(schema.default, nw.Expr):
             default_value = schema.default
         else:
-            default_value = pl.lit(schema.default, dtype=schema.dtype.type)
-        expr = pl.col(schema.selector)
+            default_value = nw.lit(schema.default, dtype=schema.dtype.type)
+        expr = nw.col(schema.selector)
         if is_float_dtype(check_obj, schema.selector):
-            expr = expr.fill_nan(default_value)
+            # TODO: Implement fill_nan in narwhals
+            expr = (
+                nw.when(~expr.is_nan())
+                .then(expr)
+                .otherwise(nw.lit(default_value))
+            )
         else:
             expr = expr.fill_null(default_value)
 
