@@ -3,7 +3,7 @@
 import re
 from typing import Any, Iterable, Optional, TypeVar, Union
 
-import polars as pl
+import narwhals.stable.v1 as nw
 
 from pandera.api.extensions import register_builtin_check
 from pandera.api.polars.types import PolarsData
@@ -15,7 +15,7 @@ T = TypeVar("T")
     aliases=["eq"],
     error="equal_to({value})",
 )
-def equal_to(data: PolarsData, value: Any) -> pl.LazyFrame:
+def equal_to(data: PolarsData, value: Any) -> nw.LazyFrame:
     """Ensure all elements of a data container equal a certain value.
 
     :param data: NamedTuple PolarsData contains the dataframe and column name for the check. The keys
@@ -23,28 +23,28 @@ def equal_to(data: PolarsData, value: Any) -> pl.LazyFrame:
     :param value: values in this polars data structure must be
         equal to this value.
     """
-    return data.lazyframe.select(pl.col(data.key).eq(value))
+    return data.lazyframe.select(nw.col(data.key) == value)
 
 
 @register_builtin_check(
     aliases=["ne"],
     error="not_equal_to({value})",
 )
-def not_equal_to(data: PolarsData, value: Any) -> pl.LazyFrame:
+def not_equal_to(data: PolarsData, value: Any) -> nw.LazyFrame:
     """Ensure no elements of a data container equals a certain value.
 
     :param data: NamedTuple PolarsData contains the dataframe and column name for the check. The keys
                 to access the dataframe is "dataframe" and column name using "key".
     :param value: This value must not occur in the checked
     """
-    return data.lazyframe.select(pl.col(data.key).ne(value))
+    return data.lazyframe.select(nw.col(data.key) != value)
 
 
 @register_builtin_check(
     aliases=["gt"],
     error="greater_than({min_value})",
 )
-def greater_than(data: PolarsData, min_value: Any) -> pl.LazyFrame:
+def greater_than(data: PolarsData, min_value: Any) -> nw.LazyFrame:
     """
     Ensure values of a data container are strictly greater than a minimum
     value.
@@ -54,14 +54,14 @@ def greater_than(data: PolarsData, min_value: Any) -> pl.LazyFrame:
     :param min_value: Lower bound to be exceeded. Must be
             a type comparable to the dtype of the series datatype of Polars
     """
-    return data.lazyframe.select(pl.col(data.key).gt(min_value))
+    return data.lazyframe.select(nw.col(data.key) > min_value)
 
 
 @register_builtin_check(
     aliases=["ge"],
     error="greater_than_or_equal_to({min_value})",
 )
-def greater_than_or_equal_to(data: PolarsData, min_value: Any) -> pl.LazyFrame:
+def greater_than_or_equal_to(data: PolarsData, min_value: Any) -> nw.LazyFrame:
     """Ensure all values are greater or equal a certain value.
 
     :param data: NamedTuple PolarsData contains the dataframe and column name for the check. The keys
@@ -69,14 +69,14 @@ def greater_than_or_equal_to(data: PolarsData, min_value: Any) -> pl.LazyFrame:
     :param min_value: Allowed minimum value for values of a series. Must be
             a type comparable to the dtype of the series datatype of Polars
     """
-    return data.lazyframe.select(pl.col(data.key).ge(min_value))
+    return data.lazyframe.select(nw.col(data.key) >= min_value)
 
 
 @register_builtin_check(
     aliases=["lt"],
     error="less_than({max_value})",
 )
-def less_than(data: PolarsData, max_value: Any) -> pl.LazyFrame:
+def less_than(data: PolarsData, max_value: Any) -> nw.LazyFrame:
     """Ensure values of a series are strictly below a maximum value.
 
     :param data: NamedTuple PolarsData contains the dataframe and column name for the check. The keys
@@ -84,14 +84,14 @@ def less_than(data: PolarsData, max_value: Any) -> pl.LazyFrame:
     :param max_value: All elements of a series must be strictly smaller
         than this. Must be a type comparable to the dtype of the series datatype of Polars
     """
-    return data.lazyframe.select(pl.col(data.key).lt(max_value))
+    return data.lazyframe.select(nw.col(data.key) < max_value)
 
 
 @register_builtin_check(
     aliases=["le"],
     error="less_than_or_equal_to({max_value})",
 )
-def less_than_or_equal_to(data: PolarsData, max_value: Any) -> pl.LazyFrame:
+def less_than_or_equal_to(data: PolarsData, max_value: Any) -> nw.LazyFrame:
     """Ensure values of a series are strictly below a maximum value.
 
     :param data: NamedTuple PolarsData contains the dataframe and column name for the check. The keys
@@ -99,7 +99,7 @@ def less_than_or_equal_to(data: PolarsData, max_value: Any) -> pl.LazyFrame:
     :param max_value: Upper bound not to be exceeded. Must be a type comparable to the dtype of the
     series datatype of Polars
     """
-    return data.lazyframe.select(pl.col(data.key).le(max_value))
+    return data.lazyframe.select(nw.col(data.key) <= max_value)
 
 
 @register_builtin_check(
@@ -112,7 +112,7 @@ def in_range(
     max_value: T,
     include_min: bool = True,
     include_max: bool = True,
-) -> pl.LazyFrame:
+) -> nw.LazyFrame:
     """Ensure all values of a series are within an interval.
 
     Both endpoints must be a type comparable to the dtype of the
@@ -130,17 +130,17 @@ def in_range(
         (the default) or whether all values must be strictly smaller than
         max_value.
     """
-    col = pl.col(data.key)
-    is_in_min = col.ge(min_value) if include_min else col.gt(min_value)
-    is_in_max = col.le(max_value) if include_max else col.lt(max_value)
+    col = nw.col(data.key)
+    is_in_min = col >= min_value if include_min else col > min_value
+    is_in_max = col <= max_value if include_max else col < max_value
 
-    return data.lazyframe.select(is_in_min.and_(is_in_max))
+    return data.lazyframe.select(is_in_min & is_in_max)
 
 
 @register_builtin_check(
     error="isin({allowed_values})",
 )
-def isin(data: PolarsData, allowed_values: Iterable) -> pl.LazyFrame:
+def isin(data: PolarsData, allowed_values: Iterable) -> nw.LazyFrame:
     """Ensure only allowed values occur within a series.
 
     This checks whether all elements of a :class:`polars.Series`
@@ -154,13 +154,13 @@ def isin(data: PolarsData, allowed_values: Iterable) -> pl.LazyFrame:
                 to access the dataframe is "dataframe" and column name using "key".
     :param allowed_values: The set of allowed values. May be any iterable.
     """
-    return data.lazyframe.select(pl.col(data.key).is_in(allowed_values))
+    return data.lazyframe.select(nw.col(data.key).is_in(allowed_values))
 
 
 @register_builtin_check(
     error="notin({forbidden_values})",
 )
-def notin(data: PolarsData, forbidden_values: Iterable) -> pl.LazyFrame:
+def notin(data: PolarsData, forbidden_values: Iterable) -> nw.LazyFrame:
     """Ensure some defined values don't occur within a series.
 
     Like :meth:`Check.isin` this check operates on single characters if
@@ -173,9 +173,7 @@ def notin(data: PolarsData, forbidden_values: Iterable) -> pl.LazyFrame:
     :param forbidden_values: The set of values which should not occur. May
         be any iterable.
     """
-    return data.lazyframe.select(
-        pl.col(data.key).is_in(forbidden_values).not_()
-    )
+    return data.lazyframe.select(~nw.col(data.key).is_in(forbidden_values))
 
 
 @register_builtin_check(
@@ -184,7 +182,7 @@ def notin(data: PolarsData, forbidden_values: Iterable) -> pl.LazyFrame:
 def str_matches(
     data: PolarsData,
     pattern: Union[str, re.Pattern],
-) -> pl.LazyFrame:
+) -> nw.LazyFrame:
     """Ensure that string starts with a match of a regular expression pattern.
 
     :param data: NamedTuple PolarsData contains the dataframe and column name for the check. The keys
@@ -195,7 +193,7 @@ def str_matches(
     if not pattern.startswith("^"):
         pattern = f"^{pattern}"
     return data.lazyframe.select(
-        pl.col(data.key).str.contains(pattern=pattern)
+        nw.col(data.key).str.contains(pattern=pattern)
     )
 
 
@@ -205,7 +203,7 @@ def str_matches(
 def str_contains(
     data: PolarsData,
     pattern: Union[str, re.Pattern],
-) -> pl.LazyFrame:
+) -> nw.LazyFrame:
     """Ensure that a pattern can be found in the string.
 
     :param data: NamedTuple PolarsData contains the dataframe and column name for the check. The keys
@@ -215,14 +213,14 @@ def str_contains(
 
     pattern = pattern.pattern if isinstance(pattern, re.Pattern) else pattern
     return data.lazyframe.select(
-        pl.col(data.key).str.contains(pattern=pattern, literal=False)
+        nw.col(data.key).str.contains(pattern=pattern, literal=False)
     )
 
 
 @register_builtin_check(
     error="str_startswith('{string}')",
 )
-def str_startswith(data: PolarsData, string: str) -> pl.LazyFrame:
+def str_startswith(data: PolarsData, string: str) -> nw.LazyFrame:
     """Ensure that all values start with a certain string.
 
     :param data: NamedTuple PolarsData contains the dataframe and column name for the check. The keys
@@ -230,18 +228,18 @@ def str_startswith(data: PolarsData, string: str) -> pl.LazyFrame:
     :param string: String all values should start with
     """
 
-    return data.lazyframe.select(pl.col(data.key).str.starts_with(string))
+    return data.lazyframe.select(nw.col(data.key).str.starts_with(string))
 
 
 @register_builtin_check(error="str_endswith('{string}')")
-def str_endswith(data: PolarsData, string: str) -> pl.LazyFrame:
+def str_endswith(data: PolarsData, string: str) -> nw.LazyFrame:
     """Ensure that all values end with a certain string.
 
     :param data: NamedTuple PolarsData contains the dataframe and column name for the check. The keys
                 to access the dataframe is "dataframe" and column name using "key".
     :param string: String all values should end with
     """
-    return data.lazyframe.select(pl.col(data.key).str.ends_with(string))
+    return data.lazyframe.select(nw.col(data.key).str.ends_with(string))
 
 
 @register_builtin_check(
@@ -251,7 +249,7 @@ def str_length(
     data: PolarsData,
     min_value: Optional[int] = None,
     max_value: Optional[int] = None,
-) -> pl.LazyFrame:
+) -> nw.LazyFrame:
     """Ensure that the length of strings is within a specified range.
 
     :param data: NamedTuple PolarsData contains the dataframe and column name for the check. The keys
@@ -264,11 +262,11 @@ def str_length(
             "Must provide at least on of 'min_value' and 'max_value'"
         )
 
-    n_chars = pl.col(data.key).str.len_chars()
+    n_chars = nw.col(data.key).str.len_chars()
     if min_value is None:
-        expr = n_chars.le(max_value)
+        expr = n_chars <= max_value
     elif max_value is None:
-        expr = n_chars.ge(min_value)
+        expr = n_chars >= min_value
     else:
         expr = n_chars.is_between(min_value, max_value)
 
