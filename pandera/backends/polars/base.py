@@ -242,14 +242,15 @@ class PolarsSchemaBackend(BaseSchemaBackend):
         error_handler: ErrorHandler,
     ) -> nw.LazyFrame:
         """Remove invalid elements in a check obj according to failures in caught by the error handler."""
-        # breakpoint()
         errors = error_handler.schema_errors
         check_outputs = (
-            nw.from_dict(  # TODO: check_output can be None or a LazyFrame...
-                data={
-                    str(i): err.check_output for i, err in enumerate(errors)
-                },
-                backend=nw.Implementation.POLARS,
+            nw.concat(
+                [
+                    err.check_output.select(nw.all().name.suffix(f"_{idx}"))
+                    for idx, err in enumerate(errors)
+                    if err.check_output is not None
+                ],
+                how="horizontal",
             )
             .lazy()
             .select(valid_rows=nw.all_horizontal(nw.selectors.boolean()))
