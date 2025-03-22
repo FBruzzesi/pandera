@@ -5,6 +5,7 @@ import datetime
 import decimal
 import inspect
 import warnings
+from decimal import Decimal as PyDecimal
 from typing import (
     Any,
     Dict,
@@ -48,22 +49,41 @@ def polars_version() -> version.Version:
     return version.parse(pl.__version__)
 
 
-def convert_py_dtype_to_polars_dtype(
+def convert_py_dtype_to_nw_dtype(  # pylint: disable=too-many-return-statements
     dtype,
-):  # TODO: Add in Narwhals - see https://github.com/narwhals-dev/narwhals/issues/2264
+) -> nw.dtypes.DType:
+    # TODO: Add in Narwhals - see https://github.com/narwhals-dev/narwhals/issues/2264
     if isinstance(dtype, DataTypeClass):
+        from narwhals._polars.utils import native_to_narwhals_dtype
+
+        return native_to_narwhals_dtype(dtype)
+    if isinstance(dtype, nw.dtypes.DType):
         return dtype
 
-    if polars_version().release < (1, 0, 0):
-        from polars.datatypes import py_type_to_dtype
+    if dtype is int:
+        return nw.Int64()
+    if dtype is float:
+        return nw.Float64()
+    if dtype is str:
+        return nw.String()
+    if dtype is bool:
+        return nw.Boolean()
+    if isinstance(dtype, type) and issubclass(dtype, datetime.datetime):  # type: ignore[redundant-expr]
+        return nw.Datetime("us")
+    if isinstance(dtype, type) and issubclass(dtype, datetime.date):  # type: ignore[redundant-expr]
+        return nw.Date()
+    if dtype is datetime.timedelta:
+        return nw.Duration()
+    if dtype is datetime.time:
+        return nw.Time()
+    if dtype is PyDecimal:
+        return nw.Decimal()
+    # if dtype is bytes:
+    #     return nw.Binary()
+    if dtype is object:
+        return nw.Object()
 
-        conversion_fn = py_type_to_dtype
-    else:
-        from polars.datatypes._parse import parse_py_type_into_dtype
-
-        conversion_fn = parse_py_type_into_dtype
-
-    return conversion_fn(dtype)
+    raise NotImplementedError(f"Unsupported dtype: {dtype}")
 
 
 def polars_object_coercible(
@@ -136,7 +156,7 @@ class DataType(dtypes.DataType):
 
         try:
             object.__setattr__(
-                self, "type", convert_py_dtype_to_polars_dtype(dtype)
+                self, "type", convert_py_dtype_to_nw_dtype(dtype)
             )
         except ValueError:
             object.__setattr__(self, "type", pl.Object)
@@ -154,7 +174,7 @@ class DataType(dtypes.DataType):
         if not isinstance(self.type, DataTypeClass):
             try:
                 object.__setattr__(
-                    self, "type", convert_py_dtype_to_polars_dtype(self.type)
+                    self, "type", convert_py_dtype_to_nw_dtype(self.type)
                 )
             except ValueError:
                 object.__setattr__(self, "type", pl.Object)
@@ -240,7 +260,7 @@ class Engine(  # pylint:disable=too-few-public-methods
             return engine.Engine.dtype(cls, data_type)
         except TypeError:
             try:
-                pl_dtype = convert_py_dtype_to_polars_dtype(data_type)
+                nw_dtype = convert_py_dtype_to_nw_dtype(data_type)
             except ValueError:
                 raise TypeError(
                     f"data type '{data_type}' not understood by "
@@ -248,7 +268,7 @@ class Engine(  # pylint:disable=too-few-public-methods
                 ) from None
 
             try:
-                return engine.Engine.dtype(cls, pl_dtype)
+                return engine.Engine.dtype(cls, nw_dtype)
             except TypeError:
                 return DataType(data_type)
 
@@ -257,99 +277,131 @@ class Engine(  # pylint:disable=too-few-public-methods
 # Numeric types
 ###############################################################################
 @Engine.register_dtype(
-    equivalents=["int8", pl.Int8, dtypes.Int8, dtypes.Int8()]
+    equivalents=["int8", nw.Int8(), pl.Int8, dtypes.Int8, dtypes.Int8()]
 )
 @immutable
 class Int8(DataType, dtypes.Int8):
     """Polars signed 8-bit integer data type."""
 
-    type = pl.Int8
+    type = nw.Int8()
 
 
 @Engine.register_dtype(
-    equivalents=["int16", pl.Int16, dtypes.Int16, dtypes.Int16()]
+    equivalents=["int16", nw.Int16(), pl.Int16, dtypes.Int16, dtypes.Int16()]
 )
 @immutable
 class Int16(DataType, dtypes.Int16):
     """Polars signed 16-bit integer data type."""
 
-    type = pl.Int16
+    type = nw.Int16()
 
 
 @Engine.register_dtype(
-    equivalents=["int32", pl.Int32, dtypes.Int32, dtypes.Int32()]
+    equivalents=["int32", nw.Int32(), pl.Int32, dtypes.Int32, dtypes.Int32()]
 )
 @immutable
 class Int32(DataType, dtypes.Int32):
     """Polars signed 32-bit integer data type."""
 
-    type = pl.Int32
+    type = nw.Int32()
 
 
 @Engine.register_dtype(
-    equivalents=["int64", int, pl.Int64, dtypes.Int64, dtypes.Int64()]
+    equivalents=[
+        "int64",
+        int,
+        nw.Int64(),
+        pl.Int64,
+        dtypes.Int64,
+        dtypes.Int64(),
+    ]
 )
 @immutable
 class Int64(DataType, dtypes.Int64):
     """Polars signed 64-bit integer data type."""
 
-    type = pl.Int64
+    type = nw.Int64()
 
 
 @Engine.register_dtype(
-    equivalents=["uint8", pl.UInt8, dtypes.UInt8, dtypes.UInt8()]
+    equivalents=["uint8", nw.UInt8(), pl.UInt8, dtypes.UInt8, dtypes.UInt8()]
 )
 @immutable
 class UInt8(DataType, dtypes.UInt8):
     """Polars unsigned 8-bit integer data type."""
 
-    type = pl.UInt8
+    type = nw.UInt8()
 
 
 @Engine.register_dtype(
-    equivalents=["uint16", pl.UInt16, dtypes.UInt16, dtypes.UInt16()]
+    equivalents=[
+        "uint16",
+        nw.UInt16(),
+        pl.UInt16,
+        dtypes.UInt16,
+        dtypes.UInt16(),
+    ]
 )
 @immutable
 class UInt16(DataType, dtypes.UInt16):
     """Polars unsigned 16-bit integer data type."""
 
-    type = pl.UInt16
+    type = nw.UInt16()
 
 
 @Engine.register_dtype(
-    equivalents=["uint32", pl.UInt32, dtypes.UInt32, dtypes.UInt32()]
+    equivalents=[
+        "uint32",
+        nw.UInt32(),
+        pl.UInt32,
+        dtypes.UInt32,
+        dtypes.UInt32(),
+    ]
 )
 @immutable
 class UInt32(DataType, dtypes.UInt32):
     """Polars unsigned 32-bit integer data type."""
 
-    type = pl.UInt32
+    type = nw.UInt32()
 
 
 @Engine.register_dtype(
-    equivalents=["uint64", pl.UInt64, dtypes.UInt64, dtypes.UInt64()]
+    equivalents=[
+        "uint64",
+        nw.UInt64(),
+        pl.UInt64,
+        dtypes.UInt64,
+        dtypes.UInt64(),
+    ]
 )
 @immutable
 class UInt64(DataType, dtypes.UInt64):
     """Polars unsigned 64-bit integer data type."""
 
-    type = pl.UInt64
+    type = nw.UInt64()
 
 
 @Engine.register_dtype(
-    equivalents=["float32", pl.Float32, dtypes.Float32, dtypes.Float32()]
+    equivalents=[
+        "float32",
+        nw.Float32(),
+        pl.Float32,
+        dtypes.Float32,
+        dtypes.Float32(),
+    ]
 )
 @immutable
 class Float32(DataType, dtypes.Float32):
     """Polars 32-bit floating point data type."""
 
-    type = pl.Float32
+    type = nw.Float32()
 
 
 @Engine.register_dtype(
     equivalents=[
         "float64",
         float,
+        nw.Float64(),
         pl.Float64,
         dtypes.Float64,
         dtypes.Float64(),
@@ -359,7 +411,7 @@ class Float32(DataType, dtypes.Float32):
 class Float64(DataType, dtypes.Float64):
     """Polars 64-bit floating point data type."""
 
-    type = pl.Float64
+    type = nw.Float64()
 
 
 @Engine.register_dtype(
@@ -448,6 +500,7 @@ class Decimal(DataType, dtypes.Decimal):
     equivalents=[
         "date",
         datetime.date,
+        nw.Date(),
         pl.Date,
         dtypes.Date,
         dtypes.Date(),
@@ -457,13 +510,14 @@ class Decimal(DataType, dtypes.Decimal):
 class Date(DataType, dtypes.Date):
     """Polars date data type."""
 
-    type = pl.Date
+    type = nw.Date()
 
 
 @Engine.register_dtype(
     equivalents=[
         "datetime",
         datetime.datetime,
+        nw.Datetime,
         pl.Datetime,
         dtypes.DateTime,
         dtypes.DateTime(),
@@ -473,7 +527,7 @@ class Date(DataType, dtypes.Date):
 class DateTime(DataType, dtypes.DateTime):
     """Polars datetime data type."""
 
-    type: Type[pl.Datetime] = pl.Datetime
+    type: Type[nw.Datetime] = nw.Datetime
     time_zone_agnostic: bool = False
 
     def __init__(  # pylint:disable=super-init-not-called
@@ -490,7 +544,7 @@ class DateTime(DataType, dtypes.DateTime):
             _kwargs["time_unit"] = time_unit
 
         object.__setattr__(
-            self, "type", pl.Datetime(time_zone=time_zone, **_kwargs)
+            self, "type", nw.Datetime(time_zone=time_zone, **_kwargs)
         )
         object.__setattr__(self, "time_zone_agnostic", time_zone_agnostic)
 
@@ -525,6 +579,7 @@ class DateTime(DataType, dtypes.DateTime):
     equivalents=[
         "time",
         datetime.time,
+        nw.Time(),
         pl.Time,
     ]
 )
@@ -532,13 +587,14 @@ class DateTime(DataType, dtypes.DateTime):
 class Time(DataType):
     """Polars time data type."""
 
-    type = pl.Time
+    type = nw.Time()
 
 
 @Engine.register_dtype(
     equivalents=[
         "timedelta",
         datetime.timedelta,
+        nw.Duration,
         pl.Duration,
         dtypes.Timedelta,
         dtypes.Timedelta(),
@@ -548,7 +604,7 @@ class Time(DataType):
 class Timedelta(DataType, dtypes.Timedelta):
     """Polars timedelta data type."""
 
-    type = pl.Duration
+    type = nw.Duration
 
     def __init__(  # pylint:disable=super-init-not-called
         self,
@@ -570,12 +626,12 @@ class Timedelta(DataType, dtypes.Timedelta):
 ###############################################################################
 
 
-@Engine.register_dtype(equivalents=[pl.Array])
+@Engine.register_dtype(equivalents=[nw.Array, pl.Array])
 @immutable(init=True)
 class Array(DataType):
     """Polars Array nested type."""
 
-    type = pl.Array
+    type = nw.Array
 
     def __init__(  # pylint:disable=super-init-not-called
         self,
@@ -612,12 +668,12 @@ class Array(DataType):
         )
 
 
-@Engine.register_dtype(equivalents=[pl.List])
+@Engine.register_dtype(equivalents=[nw.List, pl.List])
 @immutable(init=True)
 class List(DataType):
     """Polars List nested type."""
 
-    type = pl.List
+    type = nw.List
 
     def __init__(  # pylint:disable=super-init-not-called
         self,
@@ -631,22 +687,22 @@ class List(DataType):
         return cls(inner=polars_dtype.inner)
 
 
-@Engine.register_dtype(equivalents=[pl.Struct])
+@Engine.register_dtype(equivalents=[nw.Struct, pl.Struct])
 @immutable(init=True)
 class Struct(DataType):
     """Polars Struct nested type."""
 
-    type = pl.Struct
+    type = nw.Struct
 
     def __init__(  # pylint:disable=super-init-not-called
         self,
-        fields: Optional[Union[Sequence[pl.Field], SchemaDict]] = None,
+        fields: Optional[Union[Sequence[nw.Field], SchemaDict]] = None,
     ) -> None:
         if fields:
-            object.__setattr__(self, "type", pl.Struct(fields=fields))
+            object.__setattr__(self, "type", nw.Struct(fields=fields))
 
     @classmethod
-    def from_parametrized_dtype(cls, polars_dtype: pl.Struct):
+    def from_parametrized_dtype(cls, polars_dtype: nw.Struct):
         return cls(fields=polars_dtype.fields)
 
 
@@ -656,13 +712,20 @@ class Struct(DataType):
 
 
 @Engine.register_dtype(
-    equivalents=["bool", bool, pl.Boolean, dtypes.Bool, dtypes.Bool()]
+    equivalents=[
+        "bool",
+        bool,
+        nw.Boolean(),
+        pl.Boolean,
+        dtypes.Bool,
+        dtypes.Bool(),
+    ]
 )
 @immutable
 class Bool(DataType, dtypes.Bool):
     """Polars boolean data type."""
 
-    type = pl.Boolean
+    type = nw.Boolean()
 
 
 @Engine.register_dtype(
@@ -676,13 +739,20 @@ class Binary(DataType, dtypes.Binary):
 
 
 @Engine.register_dtype(
-    equivalents=["string", str, pl.Utf8, dtypes.String, dtypes.String()]
+    equivalents=[
+        "string",
+        str,
+        nw.String(),
+        pl.Utf8,
+        dtypes.String,
+        dtypes.String(),
+    ]
 )
 @immutable
 class String(DataType, dtypes.String):
     """Polars string data type."""
 
-    type = pl.Utf8
+    type = nw.String
 
 
 @Engine.register_dtype(equivalents=[pl.Categorical])
@@ -713,7 +783,7 @@ class Categorical(DataType):
 class Enum(DataType):
     """Polars enum data type."""
 
-    type = pl.Enum
+    type = nw.Enum
 
     categories: pl.Series
 
@@ -753,7 +823,7 @@ class Enum(DataType):
 class Category(DataType, dtypes.Category):
     """Pandera categorical data type for polars."""
 
-    type = pl.Utf8
+    type = nw.String
 
     def __init__(  # pylint:disable=super-init-not-called
         self, categories: Optional[Iterable[Any]] = None
@@ -790,12 +860,14 @@ class Category(DataType, dtypes.Category):
         :raises: :class:`~pandera.errors.ParserError`: if coercion fails
         """
         if isinstance(data_container, pl.LazyFrame):
-            data_container = PolarsData(data_container)
+            data_container = PolarsData(nw.from_native(data_container))
 
         try:
             return self.coerce(data_container)
         except Exception as exc:  # pylint:disable=broad-except
-            is_coercible: pl.LazyFrame = polars_object_coercible(
+            is_coercible: (
+                nw.LazyFrame
+            ) = polars_object_coercible(  # TODO: LazyFrame & LazyFrame???
                 data_container, self.type
             ) & self.__belongs_to_categories(
                 data_container.lazyframe, key=data_container.key
@@ -829,9 +901,9 @@ class Null(DataType):
     type = pl.Null
 
 
-@Engine.register_dtype(equivalents=["object", object, pl.Object])
+@Engine.register_dtype(equivalents=["object", object, nw.Object(), pl.Object])
 @immutable
 class Object(DataType):
     """Semantic representation of a :class:`numpy.object_`."""
 
-    type = pl.Object
+    type = nw.Object()
